@@ -62,10 +62,7 @@ my-os/
 │   ├── hello.txt / readme.txt / test.txt
 │   └── DISKONLY.TXT
 ├── files/                  # Semihosting 测试文件
-├── MYOS_DEV_MANUAL.md      # 开发者手册
-├── MYOS_USER_MANUAL.md     # 用户手册
-├── REPORT.md               # 项目报告
-└── PPT_GUIDE.md            # 演示指导
+│   ├── HOSTTEST.TXT
 ```
 
 ---
@@ -98,16 +95,16 @@ my-os/
 
 ### 关键实现细节
 
-| 功能 | 实现方式 |
-|------|---------|
-| 特权级 | M-mode only（无 U/S 委托） |
-| 系统调用 | `ecall` → `mcause=11` → ksp[8]=返回值 |
-| 调度器 | 协作式轮转（`sys_sleep` / `sys_yield`） |
-| Timer | CLINT mtime 忙等轮询（ISR 方案见下方） |
+| 功能       | 实现方式                                      |
+| ---------- | --------------------------------------------- |
+| 特权级     | M-mode only（无 U/S 委托）                    |
+| 系统调用   | `ecall` → `mcause=11` → ksp[8]=返回值         |
+| 调度器     | 协作式轮转（`sys_sleep` / `sys_yield`）       |
+| Timer      | CLINT mtime 忙等轮询（ISR 方案见下方）        |
 | 上下文切换 | `swtch.S` 保存/恢复 14 个 callee-saved 寄存器 |
-| fork | 全量拷贝 trapframe + ksp + 文件表 |
-| 文件系统 | VFS 层：嵌入式 + FAT16 + semihosting |
-| 页表 | Sv39，内核 4MB 恒等映射 (RWX) |
+| fork       | 全量拷贝 trapframe + ksp + 文件表             |
+| 文件系统   | VFS 层：嵌入式 + FAT16 + semihosting          |
+| 页表       | Sv39，内核 4MB 恒等映射 (RWX)                 |
 
 ### Timer ISR 为什么用轮询代替
 
@@ -132,15 +129,15 @@ exit            退出 Shell
 
 ## 技术指标
 
-| 指标 | 数值 |
-|------|------|
-| 总代码量 | ~2300 行 (C + 汇编) |
-| 最大任务数 | 8 (MAX_TASKS) |
-| 每任务栈 | 4KB |
-| 文件描述符 | 16/进程 |
-| 系统调用 | 13 个 |
-| 用户程序 | 11 个 |
-| 支持存储 | 嵌入式 + FAT16 + Semihosting |
+| 指标       | 数值                         |
+| ---------- | ---------------------------- |
+| 总代码量   | ~2300 行 (C + 汇编)          |
+| 最大任务数 | 8 (MAX_TASKS)                |
+| 每任务栈   | 4KB                          |
+| 文件描述符 | 16/进程                      |
+| 系统调用   | 13 个                        |
+| 用户程序   | 11 个                        |
+| 支持存储   | 嵌入式 + FAT16 + Semihosting |
 
 ---
 
