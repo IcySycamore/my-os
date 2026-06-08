@@ -1,9 +1,16 @@
-# Makefile for my-os v5.0 — with embedded file system
+# Makefile for my-os v7.1 — with embedded file system
 TOOLPREFIX = riscv64-unknown-elf-
 CC  = $(TOOLPREFIX)gcc
 LD  = $(TOOLPREFIX)ld
 CFLAGS  = -Wall -Werror -O2 -nostdlib -nostartfiles -ffreestanding
-CFLAGS += -march=rv64ima_zicsr -mabi=lp64 -mcmodel=medany
+# Detect whether GCC needs explicit _zicsr extension (GCC 13+) or includes it (GCC 12-)
+HAS_ZICSR := $(shell $(CC) -march=rv64ima_zicsr -mabi=lp64 -E -x c /dev/null -o /dev/null 2>/dev/null && echo 1 || echo 0)
+ifeq ($(HAS_ZICSR),1)
+  MARCH := rv64ima_zicsr
+else
+  MARCH := rv64ima
+endif
+CFLAGS += -march=$(MARCH) -mabi=lp64 -mcmodel=medany
 CFLAGS += -I. -Ikernel
 
 K_OBJS = kernel/entry.o kernel/swtch.o kernel/uart.o kernel/vm.o
