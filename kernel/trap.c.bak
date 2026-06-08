@@ -1,0 +1,185 @@
+// kernel/trap.c — Trap handling (xv6 trap.c + trampoline.S)
+#include "proc.h"
+
+void uart_puts(const char *s);
+void uart_puthex(unsigned long x);
+void uart_putdec(int n);
+void handle_syscall(void);
+void schedule(void);
+
+// ---- CSR operations (xv6 riscv.h) ----
+static inline unsigned long r_mstatus(void)
+{ unsigned long x; asm("csrr %0,mstatus":"=r"(x)); return x; }
+static inline void w_mstatus(unsigned long x)
+{ asm("csrw mstatus,%0"::"r"(x)); }
+static inline void w_mtvec(unsigned long a)
+{ asm("csrw mtvec,%0"::"r"(a)); }
+static inline unsigned long r_mcause(void)
+{ unsigned long x; asm("csrr %0,mcause":"=r"(x)); return x; }
+static inline unsigned long r_mepc(void)
+{ unsigned long x; asm("csrr %0,mepc":"=r"(x)); return x; }
+static inline void w_mepc(unsigned long x)
+{ asm("csrw mepc,%0"::"r"(x)); }
+static inline unsigned long r_mie(void)
+{ unsigned long x; asm("csrr %0,mie":"=r"(x)); return x; }
+static inline void w_mie(unsigned long x)
+{ asm("csrw mie,%0"::"r"(x)); }
+
+// ---- Timer (xv6 trap.c + kernelvec.S timer part) ----
+#define CLINT_BASE      0x02000000UL
+#define CLINT_MTIMECMP   (CLINT_BASE + 0x4000)
+#define CLINT_MTIME      (CLINT_BASE + 0xbff8)
+#define TIMER_INTERVAL   8000000
+unsigned long ticks;
+
+static void timer_set_next(void)
+{
+    volatile unsigned long *mt = (unsigned long*)CLINT_MTIME;
+    volatile unsigned long *mc = (unsigned long*)CLINT_MTIMECMP;
+    *mc = *mt + TIMER_INTERVAL;
+}
+
+// ---- Scheduler ----
+
+void schedule(void)
+{
+    // 唤醒到期睡眠任务
+    for (int i = 0; i < task_count; i++)
+        if (tasks[i].state == TASK_SLEEPING && ticks >= tasks[i].sleep_until)
+            tasks[i].state = TASK_READY;
+
+    // 找下一个 READY 任务 (round-robin)
+    int next = (current_task + 1) % task_count, scanned = 0;
+    while (tasks[next].state != TASK_READY && scanned++ < task_count)
+        next = (next + 1) % task_count;
+    if (scanned >= task_count) return;
+
+    Task *cur = &tasks[current_task];
+    Task *nxt = &tasks[next];
+
+    // 保存当前任务 stack 顶部 256B 到 trapframe
+    // （machine_trap 已在入口保存，此处保险重复保存，覆盖可能的栈修改）
+    {
+        unsigned long cur_sp_val;
+        asm("mv %0, sp" : "=r"(cur_sp_val));
+        unsigned long *stack_top = (unsigned long*)cur_sp_val;
+        for (int i = 0; i < 256 / 8; i++)
+            ((unsigned long*)cur->trapframe)[i] = stack_top[i];
+    }
+
+    if (cur->state == TASK_RUNNING)
+        cur->state = TASK_READY;
+    nxt->state = TASK_RUNNING;
+
+    uart_puts("[");
+    uart_putdec(cur->pid); uart_puts("->"); uart_putdec(nxt->pid);
+    uart_puts("] ");
+
+    current_task = next;
+
+    // 恢复下一个任务的 trapframe 到其栈上（trap_vector 会从此区域恢复寄存器）
+    {
+        unsigned long *src = (unsigned long*)nxt->trapframe;
+        unsigned long ndst;
+        asm("mv %0, sp" : "=r"(ndst));
+        // ndst 是当前 sp。但我们需要把 trapframe 恢复到 nxt 栈上的 trap_vector 保存区位置。
+        // nxt->ctx.sp 在 task_create 时设为 stack_top - 256，且在每次 swtch 时被覆盖。
+        // 实际上 trap_vector 期望数据在 sp 处，而 swtch 把 nxt->ctx.sp 加载到 sp。
+        // 所以我们不手动复制——swtch 加载 nxt->ctx.sp 后，trap_vector 的 ld 从此处读取。
+        // 我们必须确保 nxt->ctx.sp 指向已恢复的 trapframe 数据。
+        // 简单方案：用当前 sp 作为中间位置，复制过去后 swtch 保存此 sp 为 cur->ctx.sp。
+        // 但更简单：直接在 nxt->ctx.sp 处写入 trapframe。
+        unsigned long *dst = (unsigned long*)nxt->ctx.sp;
+        for (int i = 0; i < 256 / 8; i++)
+            dst[i] = src[i];
+    }
+
+    swtch(&cur->ctx, &nxt->ctx);
+}
+
+// ---- Machine-mode trap dispatcher (xv6 trap.c usertrap) ----
+__attribute__((used)) void machine_trap(void)
+{
+    Task *t = &tasks[current_task];
+    unsigned long tf_sp;
+    asm("mv %0, sp" : "=r"(tf_sp));
+
+    // 保存 trap_vector 刚存的 256B 寄存器快照到 trapframe
+    for (int i = 0; i < 256 / 8; i++)
+        ((unsigned long*)t->trapframe)[i] = ((unsigned long*)tf_sp)[i];
+
+    unsigned long cause = r_mcause();
+
+    if (cause & (1UL << 63)) {
+        // Timer interrupt
+        if ((cause & 0xff) == 7) {
+            ticks++;
+            timer_set_next();
+            schedule();
+        }
+    } else {
+        // Exception: ecall
+        if (cause == 11) {
+            // 先设 mepc = epc+4（跳过 ecall 指令）
+            unsigned long epc = r_mepc();
+            w_mepc(epc + 4);
+
+            handle_syscall();
+
+            // 把 handle_syscall 写入 trapframe[8] 的返回值同步回栈上 a0 位置
+            // 这样 schedule 保存栈到 trapframe 时会包含正确的 a0
+            ((unsigned long*)tf_sp)[8] = ((unsigned long*)t->trapframe)[8];
+
+            schedule();
+        }
+    }
+}
+
+// ---- Trap entry (xv6 trampoline.S: save regs → dispatch → restore → mret) ----
+__attribute__((naked, aligned(4)))
+void trap_vector(void)
+{
+    asm volatile(
+        "    addi sp, sp, -256\n"
+        "    sd  ra,   0(sp)\n" "    sd  t0,   8(sp)\n"
+        "    sd  t1,  16(sp)\n" "    sd  t2,  24(sp)\n"
+        "    sd  t3,  32(sp)\n" "    sd  t4,  40(sp)\n"
+        "    sd  t5,  48(sp)\n" "    sd  t6,  56(sp)\n"
+        "    sd  a0,  64(sp)\n" "    sd  a1,  72(sp)\n"
+        "    sd  a2,  80(sp)\n" "    sd  a3,  88(sp)\n"
+        "    sd  a4,  96(sp)\n" "    sd  a5, 104(sp)\n"
+        "    sd  a6, 112(sp)\n" "    sd  a7, 120(sp)\n"
+        "    sd  s0, 128(sp)\n" "    sd  s1, 136(sp)\n"
+        "    sd  s2, 144(sp)\n" "    sd  s3, 152(sp)\n"
+        "    sd  s4, 160(sp)\n" "    sd  s5, 168(sp)\n"
+        "    sd  s6, 176(sp)\n" "    sd  s7, 184(sp)\n"
+        "    sd  s8, 192(sp)\n" "    sd  s9, 200(sp)\n"
+        "    sd s10, 208(sp)\n" "    sd s11, 216(sp)\n"
+        "    call machine_trap\n"
+        "    ld  ra,   0(sp)\n" "    ld  t0,   8(sp)\n"
+        "    ld  t1,  16(sp)\n" "    ld  t2,  24(sp)\n"
+        "    ld  t3,  32(sp)\n" "    ld  t4,  40(sp)\n"
+        "    ld  t5,  48(sp)\n" "    ld  t6,  56(sp)\n"
+        "    ld  a0,  64(sp)\n" "    ld  a1,  72(sp)\n"
+        "    ld  a2,  80(sp)\n" "    ld  a3,  88(sp)\n"
+        "    ld  a4,  96(sp)\n" "    ld  a5, 104(sp)\n"
+        "    ld  a6, 112(sp)\n" "    ld  a7, 120(sp)\n"
+        "    ld  s0, 128(sp)\n" "    ld  s1, 136(sp)\n"
+        "    ld  s2, 144(sp)\n" "    ld  s3, 152(sp)\n"
+        "    ld  s4, 160(sp)\n" "    ld  s5, 168(sp)\n"
+        "    ld  s6, 176(sp)\n" "    ld  s7, 184(sp)\n"
+        "    ld  s8, 192(sp)\n" "    ld  s9, 200(sp)\n"
+        "    ld s10, 208(sp)\n" "    ld s11, 216(sp)\n"
+        "    addi sp, sp, 256\n"
+        "    mret\n"
+    );
+}
+
+// ---- 对外接口 ----
+void trap_init(void)
+{
+    w_mtvec((unsigned long)&trap_vector);
+    timer_set_next();
+    w_mie(r_mie() | (1 << 7));       // MTIE
+    w_mstatus(r_mstatus() | (1 << 3)); // MIE
+}

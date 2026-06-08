@@ -1,0 +1,6 @@
+This is a test file created on Windows host.
+It will be embedded into MY-OS kernel and read by a user task.
+
+Purpose: Demonstrate external file read capability
+Created: 2026-05-29
+Project: MY-OS v5.0 — RISC-V Teaching OS

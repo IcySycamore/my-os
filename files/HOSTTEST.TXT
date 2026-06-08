@@ -1,0 +1,4 @@
+hello world from myosst via semihosting!
+This file is NOT embedded and NOT on the FAT disk.
+It is read directly from files/ on the host machine.
+If you see this, FD_HOST + semihosting works!

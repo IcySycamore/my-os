@@ -1,0 +1,4 @@
+This file is only on the VVFAT disk, not embedded.
+If you can read this, virtio-blk + FAT16 is working!
+
+a change while running

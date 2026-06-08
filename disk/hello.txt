@@ -1,0 +1,10 @@
+Hello from Windows host filesystem!
+
+This is a sample text file that originated on the Windows
+host machine and has been embedded into the MY-OS kernel image.
+The OS can now "read" this file through system calls.
+
+This demonstrates the external file reading capability
+for the OS implementation project.
+
+--- END OF FILE ---

@@ -1,0 +1,6 @@
+*.o
+*.d
+*.elf
+kernel/kernel
+fs.img.safe
+my-os-backup/
