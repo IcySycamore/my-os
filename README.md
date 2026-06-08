@@ -7,14 +7,16 @@
 ## 快速开始
 
 ```bash
+# ========== 方式一：本地构建（推荐） ==========
 # 前置条件: riscv64-unknown-elf 工具链 + QEMU riscv64
-# 推荐: Docker — 一键启动
-docker build -t myos-build .
-docker run --rm -v "$(pwd):/src" -w /src myos-build make
-
-# 或本地构建
 make          # → kernel.elf
 make qemu     # → QEMU 启动
+
+# ========== 方式二：Docker ==========
+# 国内用户先配镜像加速: Docker Desktop → Settings → Docker Engine →
+#   "registry-mirrors": ["https://docker.m.daocloud.io"]
+docker build -t myos-build .
+docker run --rm -v "$(pwd):/src" -w /src myos-build make
 ```
 
 ---
